@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field,EmailStr
 from typing import Optional
 from app.middleware import log_middleware
 from app.auth import verify_token
+from app.slow import sync_task, async_task
+
 app = FastAPI(
     title="AI Portfolio API",
     version="0.1.0",
@@ -38,6 +40,15 @@ async def get_echo(request: EchoRequest = Depends()):
 async def get_secure_data(token: str = Depends(verify_token)):
     return {"secret": "This is protected data", "token_used": token}
 
+@app.get("/sync-slow", tags=["Performance"])
+def sync_endpoint():
+    result = sync_task(2)
+    return {"result": result}
+
+@app.get("/async-slow", tags=["Performance"])
+async def async_endpoint():
+    result = await async_task(2)
+    return {"result": result}
 
 @app.get("/health", tags=["System"])
 def health():
