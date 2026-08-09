@@ -1,6 +1,6 @@
 from fastapi import Header, HTTPException, Depends
 
-API_TOKEN = "my-secret-token-123"
+API_TOKEN = os.getenv("API_TOKEN")
 
 async def verify_token(authorization: str = Header(None)):
     if authorization is None:
