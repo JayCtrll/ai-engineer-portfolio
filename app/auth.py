@@ -1,6 +1,8 @@
-from fastapi import Header, HTTPException, Depends
+from fastapi import Header, HTTPException
+import os
 
 API_TOKEN = os.getenv("API_TOKEN")
+
 
 async def verify_token(authorization: str = Header(None)):
     if authorization is None:

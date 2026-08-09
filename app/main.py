@@ -3,7 +3,7 @@ from typing import Optional
 
 # ====================== 第三方库导入 ======================
 from fastapi import FastAPI, Depends
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 
 # ====================== 本地项目模块导入 ======================
 from app.middleware import log_middleware

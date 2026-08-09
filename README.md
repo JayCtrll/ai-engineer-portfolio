@@ -4,11 +4,6 @@ A production-ready learning project showcasing FastAPI best practices.
 
 
 
-## CI Status Badge 
-
-
-
-
 
 ## Features
 
