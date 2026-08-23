@@ -1,14 +1,16 @@
 # ====================== 标准库导入 ======================
 from typing import Optional
-
+import os
 # ====================== 第三方库导入 ======================
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, UploadFile, File
 from pydantic import BaseModel, Field
-
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ====================== 本地项目模块导入 ======================
 from app.middleware import log_middleware
 from app.auth import verify_token
 from app.slow import sync_task, async_task
+from app.rag_service import load_or_create_vectorstore
 
 # 初始化FastAPI应用实例
 app = FastAPI(
@@ -153,6 +155,88 @@ def health() -> dict:
     """
     return {"status": "ok", "message": "Service is running"}
 
+# 确保data目录存在
+DATA_DIR = "./data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# 请求体Pydantic校验模型
+class AskRequest(BaseModel):
+    question: str
+
+@app.post("/upload", tags=["RAG"])
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    PDF文件上传接口，支持PDF文件上传并存储到本地data目录
+    
+    Args:
+        file: 上传的PDF文件
+        
+    Returns:
+        dict: 上传成功后的提示信息
+    """
+        # 只允许pdf
+    if not file.filename.lower().endswith(".pdf"):
+        return {"error": "only pdf file allowed"}
+
+    # ✅ 新增：读取文件内容并校验非空
+    file_content = await file.read()
+    if len(file_content) == 0:
+        return {"error": "uploaded file is empty, please check the pdf file"}
+        
+    save_path = os.path.join(DATA_DIR, file.filename)
+    # 保存文件到磁盘
+    with open(save_path, "wb") as f:
+        f.write(file_content)
+
+    # 加载PDF文档
+    loader = PyPDFLoader(save_path)
+    docs = loader.load()
+
+    # 文档切分
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100
+    )
+    split_docs = text_splitter.split_documents(docs)
+
+    # 获取向量库对象，追加文档
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_chroma import Chroma
+    embedding = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True}
+    )
+    vector_db = Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=embedding
+    )
+    vector_db.add_documents(split_docs)
+    return {
+        "msg": "upload and vector update success",
+        "filename": file.filename,
+        "chunk_count": len(split_docs)
+    }
+
+@app.post("/reset-db",tags=["RAG"])
+def reset_vector_db():
+    import shutil
+    db_path = "./chroma_db"
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
+    return {"msg":"vector database cleared"}
+
+@app.post("/ask", tags=["RAG"])
+async def ask_rag(req: AskRequest):
+    """
+    RAG问答接口，接收 {"question":"xxx"} 返回答案
+    """
+    from app.rag_service import answer_question
+    answer = answer_question(req.question)
+    return {
+        "question": req.question,
+        "answer": answer
+    }
 
 # 注册全局HTTP日志中间件
 app.middleware("http")(log_middleware)
