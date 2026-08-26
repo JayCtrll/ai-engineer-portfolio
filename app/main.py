@@ -1,8 +1,12 @@
 # ====================== 标准库导入 ======================
 from typing import Optional
 import os
+import logging
+import time
+# os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # ====================== 第三方库导入 ======================
-from fastapi import FastAPI, Depends, UploadFile, File
+from fastapi import FastAPI, Depends, UploadFile, File, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -10,12 +14,16 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.middleware import log_middleware
 from app.auth import verify_token
 from app.slow import sync_task, async_task
-from app.rag_service import load_or_create_vectorstore
+from app.rag_service import load_or_create_vectorstore, build_vectorstore_from_directory, answer_question
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 初始化FastAPI应用实例
 app = FastAPI(
     title="AI Portfolio API",
-    version="0.1.0",
+    version="0.2.0",
     openapi_tags=[
         {"name": "System", "description": "系统健康检测、服务状态相关接口"},
         {"name": "Echo", "description": "消息回声测试接口，支持GET/POST两种传参方式"},
@@ -38,6 +46,9 @@ class EchoRequest(BaseModel):
     sender: Optional[str] = None
     priority: int = Field(default=1, ge=1, le=5)
 
+class QuestionRequest(BaseModel):
+    query: str
+    session_id: str
 
 @app.post(
     "/echo",
@@ -226,17 +237,71 @@ def reset_vector_db():
         shutil.rmtree(db_path)
     return {"msg":"vector database cleared"}
 
-@app.post("/ask", tags=["RAG"])
-async def ask_rag(req: AskRequest):
+@app.post("/rebuild-index", tags=["RAG"])
+async def rebuild_index():
+    try:
+        build_vectorstore_from_directory()
+        return {"status": "success", "message": "Vector index rebuilt"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# @app.post("/ask", tags=["RAG"])
+# async def ask_rag(req: AskRequest):
+#     """
+#     RAG问答接口，接收 {"question":"xxx"} 返回答案
+#     """
+#     from app.rag_service import answer_question
+#     answer = answer_question(req.question)
+#     return {
+#         "question": req.question,
+#         "answer": answer
+#     }
+
+@app.post(
+    "/rag/ask",
+    tags=["RAG Chat"],
+    summary="多轮RAG问答接口",
+    description="""
+基于知识库执行RAG问答，支持多轮对话。
+1. session_id 作为会话标识，内存保存聊天历史，服务重启后会话丢失；
+2. 内部流程：query改写 → 向量库检索top6文档 → CrossEncoder重排序取top3 → LLM结合上下文与历史生成答案；
+3. 严格遵循知识库约束：上下文找不到答案固定返回 `I don't know`；
+""",
+)
+def rag_ask(req: QuestionRequest):
     """
-    RAG问答接口，接收 {"question":"xxx"} 返回答案
+    :param req: 请求体包含用户query与session_id会话标识
+    :return: 返回会话ID、原始提问、RAG生成回答
     """
-    from app.rag_service import answer_question
-    answer = answer_question(req.question)
+    answer = answer_question(query=req.query, session_id=req.session_id)
     return {
-        "question": req.question,
+        "session_id": req.session_id,
+        "query": req.query,
         "answer": answer
     }
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+@app.delete(
+    "/rag/session/{session_id}",
+    tags=["RAG Chat"],
+    summary="清除指定会话历史",
+    description="删除内存中指定session_id的全部对话记录。不存在会话不会报错。内存存储，服务重启自动清空全部会话。",
+)
+def delete_session(session_id: str):
+    if session_id in store:
+        del store[session_id]
+        logger.info(f"[Session] deleted session: {session_id}")
+        return {"session_id": session_id, "status": "deleted"}
+    logger.warning(f"[Session] delete session not found: {session_id}")
+    return {"session_id": session_id, "status": "not_found"}
+
 # 注册全局HTTP日志中间件
 app.middleware("http")(log_middleware)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,13 +1,17 @@
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
 import os
+import logging
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+API_TOKEN = os.getenv("API_TOKEN", default="my-secret-token-123")
+security_scheme = HTTPBearer(auto_error=False)
 
-API_TOKEN = os.getenv("API_TOKEN")
-
-
-async def verify_token(authorization: str = Header(None)):
-    if authorization is None:
+async def verify_token(creds: HTTPAuthorizationCredentials = Depends(security_scheme)):
+    if creds is None:
         raise HTTPException(status_code=401, detail="Authorization header missing")
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or token != API_TOKEN:
+    if creds.credentials != API_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing token")
-    return token
+    return creds.credentials
