@@ -102,7 +102,7 @@ def load_or_create_vectorstore():
         persist_directory="./chroma_db",
         embedding_function=embedding
     )
-    retriever = vector_db.as_retriever(search_kwargs={"k": 6})
+    retriever = vector_db.as_retriever(search_kwargs={"k": 3})
     logger.info("[VectorStore] retriever ready, k=6")
     return retriever
 
