@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: fastapi-rag-assistant
+    runtime: docker
+    plan: free
+    envVars:
+      - key: GROQ_API_KEY
+        value: 你的Groq API Key
+      - key: PYTHON_UNBUFFERED
+        value: "1"
