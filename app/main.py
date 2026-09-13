@@ -29,6 +29,7 @@ app = FastAPI(
         {"name": "Echo", "description": "消息回声测试接口，支持GET/POST两种传参方式"},
         {"name": "Auth", "description": "Token鉴权、受保护资源访问接口"},
         {"name": "Performance", "description": "同步/异步耗时性能测试接口"},
+        {"name": "News RAG", "description": "新闻RAG问答：基于MinIO清洗后的新闻向量库检索并生成答案"},
     ],
 )
 
@@ -49,6 +50,19 @@ class EchoRequest(BaseModel):
 class QuestionRequest(BaseModel):
     query: str
     session_id: str
+
+class NewsAskRequest(BaseModel):
+    """
+    新闻RAG问答请求体模型
+
+    Attributes:
+        query: 用户提问文本，必填
+        top_k: 返回引用的新闻条数，默认3，范围1~10
+        use_llm: 是否使用LLM生成答案，默认True；设为False时仅返回检索到的相关新闻
+    """
+    query: str
+    top_k: int = Field(default=3, ge=1, le=10)
+    use_llm: bool = True
 
 @app.post(
     "/echo",
@@ -298,6 +312,33 @@ def delete_session(session_id: str):
         return {"session_id": session_id, "status": "deleted"}
     logger.warning(f"[Session] delete session not found: {session_id}")
     return {"session_id": session_id, "status": "not_found"}
+
+@app.post(
+    "/news/ask",
+    tags=["News RAG"],
+    summary="新闻RAG问答接口",
+    description="""
+基于新闻向量库执行RAG问答，数据来自MinIO中spark_cleaner清洗后的news_cleaned.parquet。
+1. 内部流程：新闻向量库相似性检索 top_k 条 → Ollama LLM 基于检索结果生成答案；
+2. 返回 answer（生成答案）与 sources（引用的新闻列表，含标题/来源/链接/发布时间/情感/相关度分）；
+3. use_llm=False 时仅返回检索到的相关新闻列表，不调用LLM；
+4. 依赖本地 MinIO + Ollama，部署环境未安装对应依赖时调用将返回500；
+""",
+)
+def news_ask(req: NewsAskRequest) -> dict:
+    """
+    新闻RAG问答接口
+
+    Args:
+        req: NewsAskRequest，包含query提问、top_k引用条数、use_llm是否生成答案
+
+    Returns:
+        dict: 包含query、answer（LLM生成答案或降级提示）和sources（引用的新闻列表）
+    """
+    # 懒加载：news_rag 依赖 pyspark/MinIO，仅在本地开发环境安装，
+    # 避免在 Docker 部署环境因缺少依赖导致服务启动失败
+    from app.news_rag import get_news_answer
+    return get_news_answer(query=req.query, top_k=req.top_k, use_llm=req.use_llm)
 
 # 注册全局HTTP日志中间件
 app.middleware("http")(log_middleware)
