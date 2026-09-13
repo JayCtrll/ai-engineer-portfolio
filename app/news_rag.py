@@ -36,14 +36,13 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
-from pyspark.sql import SparkSession
 
 logger = logging.getLogger(__name__)
 
-# ---------- MinIO 配置 ----------
-MINIO_ENDPOINT = "http://127.0.0.1:9000"
-MINIO_ACCESS_KEY = "minioadmin"
-MINIO_SECRET_KEY = "minioadmin"
+# ---------- MinIO 配置（支持环境变量覆盖，便于 docker-compose 部署） ----------
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://127.0.0.1:9000")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
 # spark_cleaner.py 清洗后的新闻 parquet（Spark 分区目录）
 INPUT_PARQUET = "s3a://spark-bucket/news/cleaned"
 
@@ -60,7 +59,7 @@ RELEVANCE_THRESHOLD = 1.2
 # ---------- LLM 配置 ----------
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 # 用 qwen3:4b：中文回答更稳定（qwen2:1.5b 对"答案语言跟随提问"指令执行不稳定）
-LLM_MODEL = "qwen2:1.5b"
+LLM_MODEL = "qwen3:4b"
 
 # hadoop-aws + aws-sdk 两个 jar 提供 s3a:// 协议支持
 SPARK_JARS = (
@@ -95,8 +94,14 @@ _llm = None
 
 # ============================ 数据读取（MinIO → Documents） ============================
 
-def create_spark() -> SparkSession:
-    """创建带 MinIO(S3A) 连接的 SparkSession。"""
+def create_spark() -> "SparkSession":
+    """创建带 MinIO(S3A) 连接的 SparkSession。
+
+    pyspark 在函数内懒加载：无 Spark 依赖的环境（如 Docker 部署）也能
+    import 本模块并加载已有向量库，仅重建/构建时才需要 pyspark。
+    """
+    from pyspark.sql import SparkSession  # noqa: F401  (懒加载)
+
     # 保证 Spark worker 与 driver 使用同一 Python 解释器，
     # 否则 createDataFrame 等操作会报 PYTHON_VERSION_MISMATCH
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
@@ -116,7 +121,7 @@ def create_spark() -> SparkSession:
     )
 
 
-def load_news(spark: SparkSession) -> pd.DataFrame:
+def load_news(spark: "SparkSession") -> pd.DataFrame:
     """从 MinIO 读取新闻 parquet，转成 Pandas DataFrame。"""
     df = spark.read.parquet(INPUT_PARQUET)
     count = df.count()

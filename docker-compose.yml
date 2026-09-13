@@ -1,10 +1,43 @@
-version: '3.8'
+# docker-compose.yml — AI Portfolio API + MinIO 编排
+# 用法: docker compose up -d --build   （需在项目根目录，Dockerfile 同目录）
+
+networks:
+  # 服务间共享网络：api 通过服务名 minio 访问 MinIO
+  news-net:
+    driver: bridge
 
 services:
   api:
-    build: .
+    build: .                       # 构建当前目录 Dockerfile
+    container_name: news_api
     ports:
       - "8000:8000"
+    depends_on:
+      - minio                      # 先启动 MinIO，再启动 API
+    environment:
+      # news_rag.py 支持环境变量覆盖 MinIO 配置；容器内用服务名 minio 访问
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
     volumes:
-      - ./app:/code/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      # 挂载宿主机新闻向量库：容器内直接加载，无需 Spark/MinIO 重建
+      # （镜像未安装 pyspark 依赖，若缺少该目录，/news/ask 将返回 500）
+      - ./news_chroma_db:/code/news_chroma_db
+    networks:
+      - news-net
+
+  minio:
+    # 使用 MinIO 官方 Quay 镜像（Docker Hub 的 minio/minio 对匿名拉取受限）
+    image: quay.io/minio/minio
+    container_name: news_minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"                # S3 API 端口
+      - "9001:9001"                # Web 控制台端口
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./minio_data:/data         # 数据持久化到宿主 ./minio_data
+    networks:
+      - news-net
